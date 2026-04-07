@@ -1,7 +1,7 @@
 ---
 name: Universal Watermarker
 slug: universal-watermarker
-version: 1.0.0
+version: 1.1.0
 author: Cribug
 tags: [pdf, image, tool, security, watermark]
 ---
@@ -25,6 +25,7 @@ tags: [pdf, image, tool, security, watermark]
 | `font_size` | int | 否 | `50` | 水印字体大小。 |
 | `mode` | string | 否 | `"center"` | 排版模式：`"center"` (居中单水印) 或 `"tile"` (全图平铺防伪网格)。 |
 | `angle` | int | 否 | `30` | 水印倾斜角度（仅在 `mode="tile"` 时生效）。 |
+| `auto_adjust` | bool | 否 | `True` | **[新]** 开启后自动根据背景亮度切换黑/白水印，建议开启。 |
 
 ## 输入与输出规范 (I/O)
 - **存储位置**: 处理后的文件直接保存在原文件所在目录下。
