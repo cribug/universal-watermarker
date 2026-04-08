@@ -2,12 +2,48 @@ import os
 import io
 import math
 import platform
+import urllib.request
 from typing import Union, List, Tuple
 from PIL import Image, ImageDraw, ImageFont, ImageStat
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
+def setup_environment():
+    """
+    Clawhub 云端环境初始化：自动下载必备字体文件
+    """
+    font_dir = "./fonts"
+    font_name = "AlibabaPuHuiTi-3-65-Medium.ttf"
+    font_path = os.path.join(font_dir, font_name)
+    
+    # 必须使用 raw.githubusercontent.com 获取真实二进制文件
+    raw_url = "https://raw.githubusercontent.com/cribug/universal-watermarker/main/fonts/AlibabaPuHuiTi-3-65-Medium.ttf"
+    
+    if not os.path.exists(font_path):
+        print(f"⏳ 检测到首次运行，正在自动拉取核心字体: {font_name} ...")
+        # 自动创建 fonts 文件夹
+        os.makedirs(font_dir, exist_ok=True)
+        
+        try:
+            # 伪装 User-Agent，防止 GitHub API 拦截爬虫
+            req = urllib.request.Request(
+                raw_url, 
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
+            
+            with urllib.request.urlopen(req) as response, open(font_path, 'wb') as out_file:
+                # 将流写入本地文件
+                out_file.write(response.read())
+            print("✅ 字体文件下载并部署成功！环境已就绪。")
+            
+        except Exception as e:
+            print(f"❌ 字体下载失败，请检查网络或 URL: {e}")
+            # 如果下载失败，抛出异常阻断后续运行，符合我们“宁可报错不可乱码”的原则
+            raise RuntimeError("初始化环境失败，无法获取字体文件。")
+    else:
+        print("✅ 字体文件已存在，无需重复下载。")
 
 def register_pdf_font(font_path: str) -> str:
     """为 PDF 注册字体并返回字体名称"""
@@ -287,20 +323,19 @@ def process_files(
     return results
 
 if __name__ == "__main__":
-    # 供开发者本地调试使用
-    # pass
-    process_files(
-        [
-            '../test/1.pdf',
-            '../test/2.pdf',
-            '../test/3.pdf',
-            '../test/4.pdf',
-            '../test/5.jpg',
-            '../test/6.png',
-        ],
-        '仅供内部测试使用',
-        # color='#FF0000',
-        # mode='tile',
-        # mode='center',
-    )
+    setup_environment()
+    # process_files(
+    #     [
+    #         '../test/1.pdf',
+    #         '../test/2.pdf',
+    #         '../test/3.pdf',
+    #         '../test/4.pdf',
+    #         '../test/5.jpg',
+    #         '../test/6.png',
+    #     ],
+    #     '仅供内部测试使用',
+    #     # color='#FF0000',
+    #     # mode='tile',
+    #     # mode='center',
+    # )
     
