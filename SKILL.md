@@ -1,14 +1,20 @@
 ---
 name: Universal Watermarker
 slug: universal-watermarker
-version: 1.1.0
+version: 2.0.0
 author: Cribug
 tags: [pdf, image, tool, security, watermark]
 ---
 
 # Universal Watermarker Skill
 
-该技能可以为 PDF 文件和主流图片格式（JPG, PNG, BMP）添加自定义文本水印。支持智能跨平台中文字体识别，以及企业级防伪平铺模式。
+一款具有高度工程化水准的文件防伪处理工具。支持 PDF 与图片混批，内置响应式排版引擎，字体自动映射与文件全内置，彻底解决乱码、水印移位与缩放兼容性问题。
+
+## 核心模式 (Modes)
+
+1. **`diagonal` (对角单水印 - 默认)**：水印从画面左下角贯穿至右上角。极客级三角函数计算，无论文档是横是竖，均能保证完美端对端覆盖。
+2. **`center` (居中单水印)**：水平放置于文档核心视角的正中央。
+3. **`tile` (全图平铺)**：满屏交叉斜向覆盖，极致防伪。
 
 ## 运行环境
 - **Language**: Python 3.8+
@@ -19,13 +25,15 @@ tags: [pdf, image, tool, security, watermark]
 
 | 参数名 | 类型 | 必填 | 默认值 | 描述 |
 | :--- | :--- | :--- | :--- | :--- |
-| `files` | list/string | 是 | 无 | 需要处理的文件绝对或相对路径（支持单个路径字符串或路径列表）。 |
+| `files` | list/string | 是 | 无 | 待处理的文件路径（支持单个路径字符串或路径列表）。 |
 | `text` | string | 是 | 无 | 水印文字内容（如 "内部机密"）。 |
 | `opacity` | float | 否 | `0.3` | 水印不透明度，范围 0.0 到 1.0。 |
-| `font_size` | int | 否 | `50` | 水印字体大小。 |
-| `mode` | string | 否 | `"center"` | 排版模式：`"center"` (居中单水印) 或 `"tile"` (全图平铺防伪网格)。 |
+| `scale` | float | 否 | `None (智能默认)` | 响应式字体比例 (0.0~1.0)。<br>`diagonal` 默认 `0.8`（占据对角线 80%）<br>`center` 默认 `0.5`（占据画面宽度 50%）<br>`tile` 默认 `0.25`。 |
+| `mode` | string | 否 | `"diagonal"` | 渲染模式：`"diagonal"`, `"center"`, `"tile"`。 |
 | `angle` | int | 否 | `30` | 水印倾斜角度（仅在 `mode="tile"` 时生效）。 |
-| `auto_adjust` | bool | 否 | `True` | **[新]** 开启后自动根据背景亮度切换黑/白水印，建议开启。 |
+| `auto_adjust` | bool | 否 | `True` | 自动背景亮度感应，在 `color` 为 `None` 时智能切换深色/浅色水印。 |
+| `color` | string/tuple | 否 | `None` | 自定义水印颜色，可传入十六进制 `"#FF0000"` 或 RGB 元组 `(255,0,0)`。若设置，将无视自动亮度调节。 |
+| `font_path` | string | 否 | `"./fonts/AlibabaPuHuiTi-3-65-Medium.ttf"` | 字体文件路径，支持 .ttf 和 .ttc。 |
 
 ## 输入与输出规范 (I/O)
 - **存储位置**: 处理后的文件直接保存在原文件所在目录下。

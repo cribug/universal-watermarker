@@ -2,63 +2,39 @@ import os
 import io
 import math
 import platform
-import numpy as np
 from typing import Union, List, Tuple
 from PIL import Image, ImageDraw, ImageFont, ImageStat
-from pypdf import PdfReader, PdfWriter, Transformation
+from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-def get_system_font_path() -> str:
-    """全局唯一的字体路径探测器"""
-    system = platform.system()
-    font_paths = []
-    if system == "Windows":
-        font_paths = ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc"]
-    elif system == "Darwin":
-        font_paths = ["/System/Library/Fonts/STHeiti Light.ttc", "/Library/Fonts/Arial Unicode.ttf"]
-    else:
-        # Linux 常用路径
-        font_paths = [
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
-        ]
+def register_pdf_font(font_path: str) -> str:
+    """为 PDF 注册字体并返回字体名称"""
+    if not os.path.exists(font_path):
+        raise FileNotFoundError(f"【关键错误】找不到指定的字体文件: {os.path.abspath(font_path)}。请确保 fonts 文件夹内有该文件。")
     
-    for path in font_paths:
-        if os.path.exists(path):
-            return path
-    return None
-
-def get_pdf_font_name() -> str:
-    """PDF 专用：注册并返回字体名称"""
-    font_path = get_system_font_path()
-    if not font_path:
-        return "Helvetica" # 兜底英文
-    
+    # 提取文件名（不含后缀）作为 PDF 内部引用的字体名
     font_name = os.path.basename(font_path).split('.')[0]
     try:
-        # 检查是否已注册过，避免重复注册性能损耗
+        # 避免重复注册
         if font_name not in pdfmetrics.getRegisteredFontNames():
+            # 兼容处理：如果是 ttc 则取第一个子字体，如果是 ttf 则直接加载
             if font_path.lower().endswith('.ttc'):
                 pdfmetrics.registerFont(TTFont(font_name, font_path, subfontIndex=0))
             else:
                 pdfmetrics.registerFont(TTFont(font_name, font_path))
         return font_name
-    except:
-        return "Helvetica"
-
-def get_image_font(requested_size: int) -> ImageFont.FreeTypeFont:
-    """图片专用：加载并返回 Pillow 字体对象"""
-    font_path = get_system_font_path()
-    try:
-        if font_path:
-            # Pillow 处理 TTC 需要指定 index=0
-            return ImageFont.truetype(font_path, requested_size)
-    except:
-        pass
-    return ImageFont.load_default()
+    except Exception as e:
+        raise RuntimeError(f"字体注册失败: {e}")
+    
+def parse_color(c: Union[str, Tuple[int, int, int]]) -> Tuple[int, int, int]:
+    """解析颜色输入，支持 '#FF0000' 或 (255, 0, 0)"""
+    if isinstance(c, str):
+        c = c.lstrip('#')
+        if len(c) == 3: c = ''.join([x*2 for x in c]) # 处理 #F00 简写
+        return tuple(int(c[i:i+2], 16) for i in (0, 2, 4))
+    return tuple(c)
 
 def get_brightness_and_color(image_obj: Image.Image, auto_adjust: bool) -> Tuple[int, Tuple]:
     """计算背景亮度并决定颜色 (R, G, B)"""
@@ -74,7 +50,18 @@ def get_brightness_and_color(image_obj: Image.Image, auto_adjust: bool) -> Tuple
         return (60, 60, 60)
     return (255, 255, 255)
 
-def add_image_watermark(input_path: str, output_path: str, text: str, opacity: float, font_size: int, mode: str, angle: int, auto_adjust: bool):
+def add_image_watermark(
+    input_path: str,
+    output_path: str,
+    text: str,
+    opacity: float,
+    scale: float,
+    mode: str,
+    angle: int,
+    auto_adjust: bool,
+    color: Union[str, Tuple],
+    font_path: str,
+):
     with Image.open(input_path) as img:
         # 处理图片旋转元数据（防止手机拍的照片水印方向错了）
         try:
@@ -86,17 +73,25 @@ def add_image_watermark(input_path: str, output_path: str, text: str, opacity: f
         base = img.convert("RGBA")
         w, h = base.size
         
-        # 核心改进：自适应字号
-        # 如果用户传入的是默认的小字号（比如50），但在大图上太小，
-        # 我们取“用户设定值”和“图片宽度/20”中的较大者，确保可见性。
-        dynamic_font_size = max(font_size, int(w / 18)) if mode == 'center' else font_size
-        if mode == 'tile' and font_size == 50: # 平铺模式下如果字号没调过，也给个保底
-            dynamic_font_size = max(font_size, int(w / 25))
-            
-        font = get_image_font(dynamic_font_size)
+        # 响应式字号计算，如果是对角线模式，参考线为对角线长度
+        available_width = math.hypot(w, h) if mode == 'diagonal' else w
+        test_size = 50
+        test_font = ImageFont.truetype(font_path, test_size)
+        # 获取文字真实的像素包围盒，完美兼容中英文及符号差异
+        left, top, right, bottom = test_font.getbbox(text)
+        test_text_width = right - left
         
-        # 智能颜色
-        rgb_color = get_brightness_and_color(base, auto_adjust)
+        target_width = available_width * scale # 目标宽度为画布宽度的 scale 比例
+        # 线性推导实际需要的多大字号
+        dynamic_font_size = max(1, int(test_size * (target_width / max(test_text_width, 1))))
+        
+        font = ImageFont.truetype(font_path, dynamic_font_size)
+        
+        # 颜色决断逻辑：用户自定义优先 > 自动亮度调整
+        if color:
+            rgb_color = parse_color(color)
+        else:
+            rgb_color = get_brightness_and_color(base, auto_adjust)
         fill_color = (*rgb_color, int(255 * opacity))
         
         txt_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -108,7 +103,7 @@ def add_image_watermark(input_path: str, output_path: str, text: str, opacity: f
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
             
             # 画布扩容以支持旋转
-            diagonal = int((w**2 + h**2)**0.5 * 1.5)
+            diagonal = int(math.hypot(w, h) * 1.5)
             overlay = Image.new("RGBA", (diagonal, diagonal), (0, 0, 0, 0))
             d_overlay = ImageDraw.Draw(overlay)
             
@@ -122,8 +117,19 @@ def add_image_watermark(input_path: str, output_path: str, text: str, opacity: f
             rotated = overlay.rotate(angle, resample=Image.BICUBIC, center=(diagonal/2, diagonal/2))
             txt_layer = rotated.crop(((diagonal-w)/2, (diagonal-h)/2, (diagonal+w)/2, (diagonal+h)/2))
         else:
-            # 居中模式
-            draw.text((w/2, h/2), text, font=font, fill=fill_color, anchor="mm")
+            diag = int(math.hypot(w, h))
+            # 创建一个足够大的正方形画布来保证旋转不被裁剪
+            temp_layer = Image.new("RGBA", (diag, diag), (0, 0, 0, 0))
+            d_temp = ImageDraw.Draw(temp_layer)
+            d_temp.text((diag/2, diag/2), text, font=font, fill=fill_color, anchor="mm")
+            
+            if mode == 'diagonal':
+                # 计算左下角到右上角的完美倾斜角
+                rot_angle = math.degrees(math.atan2(h, w))
+                temp_layer = temp_layer.rotate(rot_angle, resample=Image.BICUBIC, center=(diag/2, diag/2))
+            
+            # 将中心区域裁切回图片原尺寸
+            txt_layer = temp_layer.crop(((diag-w)/2, (diag-h)/2, (diag+w)/2, (diag+h)/2))
 
         # 合并并保存为 JPEG (注意：RGBA -> RGB)
         combined = Image.alpha_composite(base, txt_layer)
@@ -132,30 +138,56 @@ def add_image_watermark(input_path: str, output_path: str, text: str, opacity: f
         else:
             combined.save(output_path)
 
-def create_watermark_pdf(text: str, canvas_width: float, canvas_height: float, center_x: float, center_y: float, opacity: float, font_size: int, mode: str, angle: int, color_rgb: tuple) -> io.BytesIO:
+def create_watermark_pdf(
+    text: str,
+    canvas_width: float,
+    canvas_height: float,
+    center_x: float,
+    center_y: float,
+    opacity: float,
+    scale: float,
+    mode: str,
+    angle: int,
+    color_rgb: tuple,
+    font_path: str
+) -> io.BytesIO:
     packet = io.BytesIO()
     # 画布大小等同于原 PDF 的底层绝对大小
     can = canvas.Canvas(packet, pagesize=(canvas_width, canvas_height))
+    font_name = register_pdf_font(font_path)
+
+    # 响应式字号计算
+    available_width = math.hypot(canvas_width, canvas_height) if mode == 'diagonal' else canvas_width
+    base_size = 50.0
+    base_text_width = pdfmetrics.stringWidth(text, font_name, base_size)
     
-    font_name = get_pdf_font_name()
-    can.setFont(font_name, font_size)
+    target_width = available_width * scale
+    dynamic_font_size = base_size * (target_width / max(base_text_width, 1))
+    
+    can.setFont(font_name, dynamic_font_size)
     can.setFillAlpha(opacity)
     can.setFillColorRGB(color_rgb[0]/255, color_rgb[1]/255, color_rgb[2]/255)
     
-    text_width = can.stringWidth(text, font_name, font_size)
-    y_fix = font_size / 3.0 # 视觉垂直居中修正
+    text_width = can.stringWidth(text, font_name, dynamic_font_size)
+    y_fix = dynamic_font_size / 3.0 # 视觉垂直居中修正
 
     if mode == 'tile':
         # 将原点平移到我们计算出的可视区域中心
         can.translate(center_x, center_y)
         can.rotate(angle)
         diagonal = math.hypot(canvas_width, canvas_height) * 1.5
-        x_spacing, y_spacing = text_width * 2.5, font_size * 4.0
+        x_spacing, y_spacing = text_width * 2.5, dynamic_font_size * 4.0
         
         for i, y in enumerate(range(int(-diagonal), int(diagonal), int(y_spacing))):
             offset = (x_spacing / 2) if i % 2 != 0 else 0
             for x in range(int(-diagonal), int(diagonal), int(x_spacing)):
                 can.drawCentredString(x + offset, y - y_fix, text)
+    elif mode == 'diagonal':
+        can.translate(center_x, center_y)
+        # 计算 PDF 画布的对角线倾斜角
+        rot_angle = math.degrees(math.atan2(canvas_height, canvas_width))
+        can.rotate(rot_angle)
+        can.drawCentredString(0, -y_fix, text)
     else:
         # 直接在可视区域中心绘制
         can.drawCentredString(center_x, center_y - y_fix, text)
@@ -164,7 +196,18 @@ def create_watermark_pdf(text: str, canvas_width: float, canvas_height: float, c
     packet.seek(0)
     return packet
 
-def add_pdf_watermark(input_path: str, output_path: str, text: str, opacity: float, font_size: int, mode: str, angle: int, auto_adjust: bool):
+def add_pdf_watermark(
+    input_path: str,
+    output_path: str,
+    text: str,
+    opacity: float,
+    scale: float,
+    mode: str,
+    angle: int,
+    auto_adjust: bool,
+    color: Union[str, Tuple],
+    font_path: str
+):
     reader = PdfReader(input_path)
     writer = PdfWriter()
 
@@ -183,11 +226,14 @@ def add_pdf_watermark(input_path: str, output_path: str, text: str, opacity: flo
         center_x = ((c_left + c_right) / 2.0) - m_left
         center_y = ((c_bottom + c_top) / 2.0) - m_bottom
         
-        # 根据需求自适应颜色
-        color = (60, 60, 60) if auto_adjust else (255, 255, 255)
+        # PDF 颜色决断
+        if color:
+            color_rgb = parse_color(color)
+        else:
+            color_rgb = (60, 60, 60) if auto_adjust else (255, 255, 255)
         
         # 4. 生成与原 PDF 同样大小的纯净画布，但内容画在 center_x, center_y
-        wm_buffer = create_watermark_pdf(text, canvas_width, canvas_height, center_x, center_y, opacity, font_size, mode, angle, color)
+        wm_buffer = create_watermark_pdf(text, canvas_width, canvas_height, center_x, center_y, opacity, scale, mode, angle, color_rgb, font_path)
         watermark_page = PdfReader(wm_buffer).pages[0]
         
         # 5. 直接叠加，完美对齐
@@ -197,7 +243,26 @@ def add_pdf_watermark(input_path: str, output_path: str, text: str, opacity: flo
     with open(output_path, "wb") as f:
         writer.write(f)
 
-def process_files(files: Union[str, List[str]], text: str, opacity: float = 0.3, font_size: int = 50, mode: str = 'center', angle: int = 30, auto_adjust: bool = True) -> List[str]:
+def process_files(
+    files: Union[str, List[str]],
+    text: str,
+    opacity: float = 0.3,
+    scale: float = 0.5,
+    mode: str = 'diagonal',
+    angle: int = 30,
+    auto_adjust: bool = True,
+    color: Union[str, Tuple[int, int, int]] = None,
+    font_path: str = "./fonts/AlibabaPuHuiTi-3-65-Medium.ttf",
+) -> List[str]:
+    # 智能推断响应式比例默认值
+    if scale is None:
+        if mode == 'diagonal':
+            scale = 0.8
+        elif mode == 'center':
+            scale = 0.5
+        else:
+            scale = 0.25
+
     if isinstance(files, str):
         files = [files]
 
@@ -212,9 +277,9 @@ def process_files(files: Union[str, List[str]], text: str, opacity: float = 0.3,
 
         try:
             if ext == '.pdf':
-                add_pdf_watermark(f, output_name, text, opacity, font_size, mode, angle, auto_adjust)
+                add_pdf_watermark(f, output_name, text, opacity, scale, mode, angle, auto_adjust, color, font_path)
             elif ext in ['.jpg', '.jpeg', '.png', '.bmp']:
-                add_image_watermark(f, output_name, text, opacity, font_size, mode, angle, auto_adjust)
+                add_image_watermark(f, output_name, text, opacity, scale, mode, angle, auto_adjust, color, font_path)
             results.append(output_name)
             print(f"成功处理: {output_name}")
         except Exception as e:
@@ -223,17 +288,19 @@ def process_files(files: Union[str, List[str]], text: str, opacity: float = 0.3,
 
 if __name__ == "__main__":
     # 供开发者本地调试使用
-    pass
-    # process_files(
-    #     [
-    #         '/Users/theo/Desktop/test/1.pdf',
-    #         '/Users/theo/Desktop/test/2.pdf',
-    #         '/Users/theo/Desktop/test/3.pdf',
-    #         '/Users/theo/Desktop/test/4.pdf',
-    #         '/Users/theo/Desktop/test/5.jpg',
-    #         '/Users/theo/Desktop/test/6.png',
-    #     ],
-    #     '仅供内部测试使用',
-    #     mode='tile'
-    # )
+    # pass
+    process_files(
+        [
+            '../test/1.pdf',
+            '../test/2.pdf',
+            '../test/3.pdf',
+            '../test/4.pdf',
+            '../test/5.jpg',
+            '../test/6.png',
+        ],
+        '仅供内部测试使用',
+        # color='#FF0000',
+        # mode='tile',
+        # mode='center',
+    )
     
